@@ -1,0 +1,841 @@
+---
+title: "BUAN 6357 Final Project"
+author: "Shivank Garg"
+date: "16-April-2019"
+output:
+  html_notebook:
+    toc: yes
+    toc_float: yes
+    number_sections: yes
+    code_folding: hide
+editor_options:
+  chunk_output_type: inline
+---
+
+
+```{r setup}
+chooseCRANmirror(graphics=FALSE, ind=1)
+knitr::opts_chunk$set(echo = FALSE)
+```
+#Executive Summary  
+
+##Data Description  
+We sourced the problem from Kaggle. We chose one competition from this site - here on called Petfinder Dataset. In summary, Petfinder would like to accurately predict how fast pets are adopted (called by them "adoptability").
+
+* **What is Petfinder.my website about**  
+    + Petfinder is a platform that connects pet rescuers, shelters and adopters. It aims at helping rescued pets be adopted quickly.
+
+* **Why work on this dataset**  
+    + In case they aren't adopted, there is a high chance that they'll need to go through euthanasia.
+    + I have always had love for animals and I read a lot about animals being killed or turned over for experiments at the animal shelter who are seriously old, ill or aggressive as well as those who remain unclaimed or unadopted after a certain number of days. 
+
+
+* **Type of data**  
+    + The adopters who use the website and find a pet to adopt can go only through a handful of information available online (photo, description, stats, etc.). Their idea is that this data might be able to predict how fast a pet is adopted.
+
+* **How can we help**  
+    + Once a good predictive algorithm is created, petfinder plan to use the data in the following ways:
+
+        + Push further those pets with highest likelihood of being adopted
+        + Avoid inducting the animals that might be euthanised later on
+        + Prioritize shelter resources and staff training
+
+* **Information Available in the Public Domain**  
+    + If a dog *raises it's* **eyebrows** *more than 15 times* when an adopter comes to visit, the chances of the dog getting adoption on the same day goes up by 3 times
+    + Both dogs and cats, *age, size and breed* are highly correlated to outcomes
+        + 95% of puppies were adopted, but the percentage fell to 76% for adult dogs and 68% for seniors.     
+        + While 82% of kittens were adopted, the older cats had a harder time finding a home, with just 60% of adults and 54% of seniors adopted.
+
+
+##Final results  
+* We ran *4 ML* algorithms to train our model
+    + Linear SVM
+    + Radial SVM
+    + Decision Tree
+    + Ensemble Boosted Decision Tree
+
+* Things that matter for animals Adoption Speed
+    + **Age** is the most important variable
+    + **Image aspect ratio** is the second most important variable. Aspect Ratio of the pictures have an impact on the pet adoption speed  
+    + **Breed** is also highly weighed. It means that adopters prefer particular breeds while adopting  
+    + **Description Word count** is our derived variable using the word count of the description column in our dataset. This is an important variable as we will see in our following Exploratory Data Analysis 
+
+***
+***
+# Data
+
+This data is from a kaggle competition: [Link](https://www.kaggle.com/c/petfinder-adoption-prediction/data)
+Millions of stray animals suffer on the streets or are euthanized in shelters every day around the world. If homes can be found for them, many precious lives can be saved - and more happy families created.
+
+[PetFinder.my](https://www.petfinder.my) has been Malaysia's leading animal welfare platform since 2008, with a database of more than 150,000 animals. PetFinder collaborates closely with animal lovers, media, corporations, and global organizations to improve animal welfare.
+
+Animal adoption rates are strongly correlated to the metadata associated with their online profiles, such as descriptive text and photo characteristics. As one example, PetFinder is currently experimenting with a simple AI tool called the Cuteness Meter, which ranks how cute a pet is based on qualities present in their photos.
+
+
+In this problem set we will predict the speed at which a pet is adopted, based on the pet's listing on PetFinder. Sometimes a profile represents a group of pets. In this case, the speed of adoption is determined by the speed at which all of the pets are adopted. The data included text, tabular, and image data. See below for details. 
+
+* **File descriptions**  
+    + **train.csv** - Tabular/text data for the training set  
+    + **test.csv** - Tabular/text data for the test set  
+    + **breed_labels.csv** - Contains Type, and BreedName for each BreedID. Type 1 is dog, 2 is cat.  
+    + **color_labels.csv** - Contains ColorName for each ColorID  
+    + **state_labels.csv** - Contains StateName for each StateID  
+    + **sentiment metadata** - Contains Sentiment analysis done using GoogleAPI(more details later) 
+    + **image metadata** - Contains Image metadata analysis done using GoogleAPI(more details later)  
+
+***
+##Read Data
+Check, install and load required packages
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+##  Install packages
+list.of.packages <- c("data.table","GGally","corrplot","yarrr","formattable","kableExtra","parallelSVM","fastAdaboost","rattle","xgbTree","h2o","doParallel","foreach","caret","kernlab","parallel","sentimentr","Metrics","rjson","imager","magrittr")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+library(data.table)
+library(GGally)
+library(caret)
+library(corrplot)
+library(tidyverse)
+library(ggthemes)
+library(tidytext)
+library(tidyr)
+library(yarrr)  #Pirate plot
+library(formattable) #For the color_tile function
+library(kableExtra) #Create nicely formatted output tables
+library(foreach) #For sequential processing
+library(parallel)
+library(doParallel)
+library(sentimentr)
+require(Metrics)
+require(rjson)
+library(rattle)
+require(magrittr)
+library(imager)
+```
+
+Load Data in R
+```{r readdata}
+
+#Set Column Names
+ct <- cols(Type = col_number(),
+           Name = col_factor(levels=NULL),
+           Breed1 = col_number(),
+           Breed2 = col_number(),
+           Gender = col_number(),
+           Color1 = col_number(),
+           Color2 = col_number(),
+           Color3 = col_number(),
+           MaturitySize = col_number(),
+           FurLength = col_number(),
+           Vaccinated = col_number(),
+           Dewormed = col_number(),
+           Sterilized = col_number(),
+           Health = col_number(),
+           State = col_number())
+
+#Load Data
+petadoption <- read.csv("./pet-adoption-prediction/train.csv",stringsAsFactors = FALSE, na.strings=c("","NA"))
+#load main train\test sets
+train <- as.data.frame(read_csv("./pet-adoption-prediction/train.csv", col_types = ct))
+#Load color_labels.csv - Contains ColorName for each ColorID
+color_labels <- read.csv("./pet-adoption-prediction/color_labels.csv",
+                         stringsAsFactors = FALSE,na.strings=c("","NA"))
+#Load state_labels.csv - Contains StateName for each StateID
+state_labels <- read.csv("./pet-adoption-prediction/state_labels.csv",
+                         stringsAsFactors = FALSE,na.strings=c("","NA"))
+#Load breed_labels.csv - Contains Type, and BreedName for each BreedID. Type 1 is dog, 2 is cat.
+breed_labels <- read.csv("./pet-adoption-prediction/breed_labels.csv",
+                         stringsAsFactors = FALSE,na.strings=c("","NA"))
+
+#Copy for Data Exploration
+pets.train <- petadoption
+
+```
+
+
+***
+
+#Exploratory Data Analysis
+##Data Overview
+Let's have a quick look at the data first!
+
+* **Glimpse of Training Data**
+    + We have almost 15 thousands dogs and cats in the dataset;
+    + Main dataset contains all important information about pets: age, breed, color,  some characteristics and other things;
+    + Desctiptions were analyzed using Google's Natural Language API providing sentiments and entities. I suppose we could do a similar thing ourselves;
+    + There are photos of some pets;
+    + Some meta-information was extracted from images and we can use it;
+    + There are separate files with labels for breeds, colors and states;
+
+* **Target Variable : Adoption speed**
+    + 0 - Pet was adopted on the same day as it was listed.
+    + 1 - Pet was adopted between 1 and 7 days (1st week) after being listed.
+    + 2 - Pet was adopted between 8 and 30 days (1st month) after being listed.
+    + 3 - Pet was adopted between 31 and 90 days (2nd & 3rd month) after being listed.
+    + 4 - No adoption after 100 days of being listed. (There are no pets in this dataset that waited   between 90 and 100 days).
+
+***
+
+```{r}
+##Check for NA values
+glimpse(pets.train)
+```
+
+We have 1257 NA observations in the Name column. After exploration we see that we have some pets with value "NA", "NoName" and NULL values. We will deal with them later on  
+We have 14993 observations and 24 rows in the main train test data
+***
+
+```{r}
+##Check for NA values
+sapply(pets.train,function(x){sum(is.na(x))})
+dim(pets.train)
+```
+***
+
+##Column renaming for easy interpretation
+```{r column rename}
+#Save a copy of raw loaded data
+pets.train.raw <- pets.train
+#Change Labels for easy understanding
+pets.train$Type[pets.train$Type == '1'] <- "Dog"
+pets.train$Type[pets.train$Type == '2'] <- "Cat"
+
+pets.train$AdoptionSpeed[pets.train$AdoptionSpeed == '0'] <- "Same Day"
+pets.train$AdoptionSpeed[pets.train$AdoptionSpeed == '1'] <- "1-7 Days"
+pets.train$AdoptionSpeed[pets.train$AdoptionSpeed == '2'] <- "8-30 Days"
+pets.train$AdoptionSpeed[pets.train$AdoptionSpeed == '3'] <- "31-90 Days"
+pets.train$AdoptionSpeed[pets.train$AdoptionSpeed == '4'] <- "No Adoption"
+
+pets.train$MaturitySize[pets.train$MaturitySize == '0'] <- "Not Specified"
+pets.train$MaturitySize[pets.train$MaturitySize == '1'] <- "Small"
+pets.train$MaturitySize[pets.train$MaturitySize == '2'] <- "Medium"
+pets.train$MaturitySize[pets.train$MaturitySize == '3'] <- "Large"
+pets.train$MaturitySize[pets.train$MaturitySize == '4'] <- "Extra Large"
+
+pets.train$Vaccinated[pets.train$Vaccinated == '1'] <- "Yes"
+pets.train$Vaccinated[pets.train$Vaccinated == '2'] <- "No"
+pets.train$Vaccinated[pets.train$Vaccinated == '3'] <- "Not Sure"
+
+pets.train$Dewormed[pets.train$Dewormed == '1'] <- "Yes"
+pets.train$Dewormed[pets.train$Dewormed == '2'] <- "No"
+pets.train$Dewormed[pets.train$Dewormed == '3'] <- "Not Sure"
+
+pets.train$Health[pets.train$Health == '1'] <- "Healthy"
+pets.train$Health[pets.train$Health == '2'] <- "Minor Injury"
+pets.train$Health[pets.train$Health == '3'] <- "Serious Injury"
+pets.train$Health[pets.train$Health == '0'] <- "Not Sure"
+```
+***
+
+##Explore Data Visually
+###Observation per Animal Type
+
+We can see that observations are balanced per Animal Type
+
+```{r}
+#Start EDA on the variables
+##Type
+pets.train %>%
+  ggplot(aes(Type))+
+  geom_bar(color = "black", fill = "#00CCFF")+
+  theme_minimal()+
+    labs(title = "Animal Type Count Plot")
+```
+
+
+##Observation per Target class
+We can see that some pets were adopted immediately, but these are rare cases: maybe someone wanted to adopt any pet, or the pet was lucky to be seen by person, who wanted a similar pet. A lot of pets aren't adopted at all, which is quite sad :( I hope our models and analysis will help them to find their home!  
+
+It is nice that a lot of pets are adopted within a first week of being listed!  
+
+```{r}
+
+#Adoption Speed
+
+pets.train %>%
+  ggplot(aes(x= AdoptionSpeed, fill = AdoptionSpeed)) +
+  geom_bar(stat = "count", color = "black") +
+  theme_minimal() +
+  theme(axis.title.y = element_blank()) +
+  scale_y_continuous(labels = comma) +
+  scale_fill_brewer(palette="YlGnBu") +
+  theme(legend.position = "top")+
+      labs(title = "Observations per Target Class")
+
+```
+
+###Photos per Animal Type
+Most of the animals have no of photos between 1 ~ 5
+
+```{r}
+#Photo Amount
+options(repr.plot.width = 12, repr.plot.height = 7)
+pets.train %>%
+  ggplot(aes(x = as.factor(PhotoAmt),  group = Type)) + 
+  geom_bar(aes(y = ..prop..), stat = "count", fill = "#330066", alpha = 0.6, color = "black") +
+  geom_text(aes( label = scales::percent(..prop..),
+                 y= ..prop.. ), stat= "count", vjust = -.5, size = 3.2) +
+  facet_wrap(~Type, ncol = 1) +
+  scale_y_continuous(labels = scales::percent)+
+  theme_minimal()+
+  ylab("Percentage")+
+  xlab("Photo Amount")+
+      labs(title = "Photo Count Plot per Animal Type")
+```
+
+
+###Fees vs Adoption Speed
+Most of the animals have no fees to adopt
+
+```{r}
+#Fees affect adoption?
+pets.train %>%
+  ggplot(aes(x = Fee)) +
+  geom_histogram(fill = "lightgrey", color = "black") +
+  theme_minimal()+
+      labs(title = "Fees Frequency Plot")
+```
+
+
+###Animal Type vs Adoption Speed
+We have approximately have equal observations for each class of AdoptionSpeed per animal type (our dependent variable y)
+
+```{r}
+
+#Adoption Speed and Type
+pets.train %>%
+  filter(!is.na(AdoptionSpeed)) %>%
+  ggplot(aes(x = Type, group = AdoptionSpeed))+
+  geom_bar(mapping = aes(fill = AdoptionSpeed, y = ..prop..), stat = "count", color = "black", position = "dodge") +
+  geom_text(aes(label = scales::percent(..prop..),
+                y =..prop..  + .02), stat= "count", 
+            position = position_dodge(width = .9), size = 3)+
+  scale_y_continuous(labels = scales::percent_format())+
+  scale_fill_brewer(palette = "PuBuGn")+
+  theme_minimal()+
+      labs(title = "Observations per Target Class per Animal Type")
+```
+
+
+### Maturity vs Type
+Most of animals have Medium Maturity
+
+```{r}
+#Maturity vs Type
+# Maturity Size
+options(repr.plot.width = 12, repr.plot.height = 7)
+pets.train %>%
+  count(Type, MaturitySize)%>%
+  ggplot(aes(x = "", y = n, fill = MaturitySize))+
+  geom_bar(stat = 'identity', position = "fill", color = "black")+
+  coord_polar('y')+
+  facet_wrap(~Type, scales = "fixed")+
+  theme_minimal()+
+  scale_fill_brewer(palette="Spectral")+
+      labs(title = "Observations per Maturity Size")
+```
+
+
+### Fur length vs Animal Type
+Most of the Animals have short fur length
+
+```{r}
+#Fur length
+pets.train %>%
+  ggplot(aes(x = FurLength))+
+  geom_bar(mapping = aes(fill = Type), position = "dodge", color = "black")+
+  theme_minimal()+
+      labs(title = "Observations per FurLength")
+```
+
+
+### Vaccination Proportion
+We have almost equal observations for Vaccination class "Yes" and "No"
+```{r}
+#Vacinated
+options(repr.plot.width = 10, repr.plot.height = 5)
+pets.train %>%
+  ggplot(aes(x = Vaccinated, group = 1))+
+  geom_bar(mapping = aes(y = ..prop..), stat = "count", fill = "#663333", color = "black") +
+  geom_text(aes(label = scales::percent(..prop..),
+                y= ..prop.. ), stat= "count", vjust = -.5)+
+  scale_y_continuous(labels = scales::percent_format())+
+  theme_minimal()+
+      labs(title = "Observations per Vaccinated Class")
+```
+
+
+
+### Vaccination vs Animal Type
+More Dogs are vaccinated compared to Cat
+```{r}
+#Vacinated vs Type
+pets.train %>%
+  ggplot(aes(x = Type, group = Vaccinated))+
+  geom_bar(mapping = aes(fill = Vaccinated, y = ..prop..), stat = "count", color = "black", position = "dodge") +
+  geom_text(aes(label = scales::percent(..prop..),
+                y =..prop..  + .02), stat= "count", 
+            position = position_dodge(width = .9), size = 3)+
+  scale_y_continuous(labels = scales::percent_format())+
+  scale_fill_brewer(palette="RdGy")+
+  theme_minimal()+
+      labs(title = "Observations per Vaccinated Class per animal type")
+```
+
+### Dewormed vs Type
+Majority of the animals are Dewormed
+```{r}
+#Dewormed
+options(repr.plot.width = 10, repr.plot.height = 5)
+pets.train %>%
+  ggplot(aes(x = Dewormed, group = 1))+
+  geom_bar(mapping = aes(y = ..prop..), stat = "count", fill = "#66CC00", color = "black", alpha = 0.7) +
+  geom_text(aes(label = scales::percent(..prop..),
+                y= ..prop.. ), stat= "count", vjust = -.5)+
+  scale_y_continuous(labels = scales::percent_format())+
+  ylab("Percentage of Dewormed")+
+  theme_minimal()+
+      labs(title = "Observations per Dewormed Class")
+```
+
+
+### Health Proportion
+Most of the Animals are Healthy
+```{r}
+#health
+options(repr.plot.width = 10, repr.plot.height = 5)
+pets.train %>%
+  ggplot(aes(x = Health, group = 1))+
+  geom_bar(mapping = aes(y = ..prop..), stat = "count", fill = "steelblue", color = "black") +
+  geom_text(aes(label = scales::percent(..prop..),
+                y= ..prop.. ), stat= "count", vjust = -.5)+
+  scale_y_continuous(labels = scales::percent_format())+
+  theme_minimal()+
+      labs(title = "Observations per Health Class")
+```
+
+
+### Description word count vs Adoption Speed, Animal
+Surprisingly we can see that Shorter the description, faster the animal is adopted  
+We can see a linear relationship between our target variable and word count. We can use this variable in our model.
+```{r Word Count}
+#Count words in the Description column
+train$word_count <- sapply(train$Description, function(x)     length(unlist(strsplit(as.character(x), "\\W+"))))
+
+count_plot <- train %>%
+  ggplot(aes(x=AdoptionSpeed, y=word_count, color = Type)) +
+  geom_point(alpha = 1, 
+             size = 4, 
+             position = "jitter") + 
+  facet_wrap(~ Type)+
+  ggtitle("Description Word Count vs Adoption Speed") +
+  xlab("AdoptionSpeed") + 
+  ylab("Word Count")
+
+count_plot
+```
+
+
+***
+
+#Data Preparation
+##Load Sentiment Data
+
+```{r Sentiment Analysis}
+# Get Sentiments
+
+######## LOAD SENTIMENT Data#######
+
+#Load Train Sentiment
+filenames_train <- list.files("./petfinder-adoption-prediction/train_sentiment", full.names=TRUE)
+fnames<-filenames_train
+sentiments_train<-c()
+for( i in (1:length(fnames))){
+  temp<-fnames[i]
+  temp_json<-fromJSON(file=temp)
+  petid <- unlist(strsplit(substring(temp,49), ".json")) #PetID from JSON file name
+  magnitude<-temp_json[["documentSentiment"]][["magnitude"]] # Magnitude
+  score<-temp_json[["documentSentiment"]][["score"]] #Sentiment Score
+  language<-temp_json[["language"]] #language of the descritpion
+  sentiments_uni<-c(petid,magnitude,score,language)
+  sentiments_train<-rbind(sentiments_train,sentiments_uni)
+}
+
+sentiments_train<-as.data.frame(sentiments_train)
+names(sentiments_train)<-c("PetID","magnitude","score","language")
+row.names(sentiments_train) <-NULL
+sentiments_train$PetID <- as.character(sentiments_train$PetID)
+sentiments_train$magnitude <- as.numeric(as.character(sentiments_train$magnitude))
+sentiments_train$score <- as.numeric(as.character(sentiments_train$score))
+sentiments_train$magScore <- sentiments_train$magnitude * sentiments_train$score
+sentiments_train$language <- NULL
+
+######## SENTIMENT #######
+```
+
+**What is Sentiment Data**
+Data providers have run each pet profile's description through Google's Natural Language API, providing analysis on sentiment and key entities. We utilize this supplementary information for your pet description analysis. There are some descriptions that the API could not analyze. As such, there are fewer sentiment files than there are rows in the dataset.
+
+Information is stored in File name format *PetID.json*
+More information about the API can be found on [Google Natural Language API reference](https://cloud.google.com/natural-language/docs/basics)
+
+
+* We use the below information from the for each Pet
+    + **score** of the sentiment ranges between -1.0 (negative) and 1.0 (positive) and         corresponds to the overall emotional leaning of the text.
+    + **magnitude** indicates the overall strength of emotion (both positive and negative) within the given text, between 0.0 and +inf. Unlike score, magnitude is not normalized; each expression of emotion within the text (both positive and negative) contributes to the text's magnitude (so longer text blocks may have greater magnitudes).
+
+***
+
+##Load Image MetaData
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+dog <- load.image("./petfinder-adoption-prediction/dog.jpg")
+cat <- load.image("./petfinder-adoption-prediction/cat.jpg")
+
+plot(dog, main = 'Sample dog image')
+plot(cat, main = 'Sample cat image')
+```
+
+```{r Load Image Metadata}
+######## IMAGE META DATA ######
+#Load train images metadata
+filenames_train <- list.files("./petfinder-adoption-prediction/train_metadata", full.names=TRUE)
+fnames<-filenames_train
+metadata_train<-c()
+for( i in (1:length(fnames))){ 
+  temp<-fnames[i]
+  temp_json<-fromJSON(file=temp)
+  petid <- unlist(strsplit(substring(temp, 48), ".json")) #PetID from JSON file name
+  petid <- unlist(strsplit(petid, "-"))[1]
+  cats <- grepl("cat", temp_json[["labelAnnotations"]], ignore.case = TRUE, fixed = FALSE)
+  dogs <- grepl("dog", temp_json[["labelAnnotations"]], ignore.case = TRUE, fixed = FALSE)
+  catIdx <- ifelse(sum(cats) == 0, NA, min(which(cats)))
+  dogIdx <- ifelse(sum(dogs) == 0, NA, min(which(dogs)))
+  catScore <- ifelse(is.na(catIdx), NA, temp_json[["labelAnnotations"]][[catIdx]]$score)
+  dogScore <- ifelse(is.na(dogIdx), NA, temp_json[["labelAnnotations"]][[dogIdx]]$score)
+  crop.x <- unlist(temp_json[["cropHintsAnnotation"]][["cropHints"]])[1]
+  crop.y <- unlist(temp_json[["cropHintsAnnotation"]][["cropHints"]])[3]
+  metadata_uni<-c(petid[1], catScore, dogScore, crop.x / crop.y, catIdx, dogIdx)
+  metadata_train<-rbind(metadata_train,metadata_uni)
+}
+metadata_train<-as.data.frame(metadata_train)
+names(metadata_train)<-c("PetID","catScore","dogScore", "aspect", "catIdx", "dogIdx")
+row.names(metadata_train) <-NULL
+metadata_train$PetID <- as.character(metadata_train$PetID)
+metadata_train$aspect <- as.numeric(as.character(metadata_train$aspect))
+metadata_train$catScore <- as.numeric(as.character(metadata_train$catScore))
+metadata_train$dogScore <- as.numeric(as.character(metadata_train$dogScore))
+metadata_train$aspect[is.nan(metadata_train$aspect)] <- 0
+metadata_train$catIdx <- as.numeric(as.character(metadata_train$catIdx))
+metadata_train$dogIdx <- as.numeric(as.character(metadata_train$dogIdx))
+metadata_train <- aggregate(metadata_train[, 2:6], by=list(metadata_train$PetID), FUN=mean, na.rm = TRUE)
+names(metadata_train)[1]<-"PetID"
+
+```
+
+**What is Image Metadata**
+The data providers run the images through Google's Vision API, providing analysis on Face Annotation, Label Annotation, Text Annotation and Image Properties. 
+
+Information is stored in File name format *PetID-ImageNumber.json*
+
+We utilize this supplementary information for our image analysis and derive some of the information.We use Image height and width in pixels, aspect ratio and Face annotation variables.
+
+More information about the API can be found on [Google Vision API reference](https://cloud.google.com/vision/docs/reference/rest/v1/images/annotate)
+
+##Merge Sentiment and Image metadata with Train data
+
+Let's merge the Sentiment Data, Metadata and Breed Data to the main Train Data
+```{r merge dataset}
+
+#Merge sentiment in train and test dataset
+train$PetID <- as.character(train$PetID)
+train <- merge(train, sentiments_train, all.x = TRUE)
+train$score[is.na(train$score)] <- mean(train$score, na.rm = TRUE)
+train$magnitude[is.na(train$magnitude)] <- mean(train$magnitude, na.rm = TRUE)
+train$magScore[is.na(train$magScore)] <- mean(train$magScore, na.rm = TRUE)
+
+#Merge metadata in train and test dataset
+train <- merge(train, metadata_train, all.x = TRUE)
+train$aspect[is.na(train$aspect)] <- 0
+train$catScore[is.na(train$catScore)] <- 0
+train$dogScore[is.na(train$dogScore)] <- 0
+train$catIdx[is.na(train$catIdx)] <- 0
+train$dogIdx[is.na(train$dogIdx)] <- 0
+
+```
+
+
+
+```{r}
+
+train <- left_join(train, breed_labels %>% 
+                          select(Breed1=BreedID, MainBreed=BreedName), by="Breed1")
+
+
+#creating Has Name variable
+train$has_name <- ifelse(is.na(train$Name), 0, 1)
+
+#creating Pure Breed variable
+not_pure <- c("Domestic Short Hair", "Domestic Medium Hair", "Domestic Long Hair", "Mixed Breed")
+train$pure_breed <- ifelse(train$MainBreed %in% not_pure, 0, 1)
+
+#making Not Specified in ordinal factors NA (just in case there are any in stage 2)
+train$MaturitySize[train$MaturitySize==0] <- NA
+train$FurLength[train$FurLength==0] <- NA
+train$Health[train$Health==0] <- NA
+
+categorical_vars <- c("Type", "Gender", "Vaccinated", "Dewormed", "Sterilized", "StateName", "MainBreed", "has_name", "pure_breed", "Breed2", "Color1", "Color2", "Color3")
+
+#Drop the unwanted columns
+train <- train %>% select(-PetID,-Name,-RescuerID,
+                          -Description,-MainBreed,-Breed2)
+
+train$AdoptionSpeed <- as.factor(train$AdoptionSpeed)
+#test$AdoptionSpeed <- as.factor(test$AdoptionSpeed)
+
+```
+
+***
+
+#Run Models and Compare them
+Set seed everywhere possible for reproduciblity
+
+* Data Preprocessing
+    + Split Data into Train and Test data in the ratio of 80/20
+
+* Cross Validation
+    + We will use k-fold(k=5) cross validation to avoid overfitting of our model
+    + We will precompute these k-folds even before our model and feed the same k-folds for training and cross validation so that we can compare our model for all k-folds and reproducibility
+
+* We will run 4 ML algorithms to train our model
+    + Linear SVM
+    + Radial SVM
+    + Decision Tree
+    + Ensemble Boosted Decision Tree
+
+##Run Models
+```{r}
+library(doParallel)
+library(xgboost)
+
+#split Data into train and test
+set.seed(13)
+trainindex <- createDataPartition(train$AdoptionSpeed, p=0.80, list= FALSE)
+pet.tr <- train[trainindex, ]
+pet.te <- train[-trainindex, ]
+
+#Split train data into 5 folds for k fold validation
+#Pre-Compute CV folds(k=5) so we can use the same ones for all models
+set.seed(13)
+pet_CV_Folds <- createMultiFolds(pet.tr$AdoptionSpeed, k = 5, times=1)
+
+#glimpse(pet.tr)
+
+#Linear SVM
+cl <- parallel::makeCluster(detectCores(logical=TRUE)-1, type='PSOCK')
+doParallel::registerDoParallel(cl)
+start.time <- Sys.time()
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, 
+                           allowParallel = TRUE,verboseIter=TRUE)
+grid <- expand.grid(C=seq(0.8,1.2,0.2))
+set.seed(13)
+pet_L_model <- train(AdoptionSpeed ~., data = pet.tr,method="svmLinear",
+                 trControl=trnControl,tuneGrid = grid)
+pet_L_model_t<- Sys.time() - start.time
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+#Radial SVM
+library(doParallel)
+cl <- parallel::makeCluster(detectCores(logical=TRUE)-1, type='PSOCK')
+doParallel::registerDoParallel(cl)
+start.time <- Sys.time()
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, 
+                           allowParallel = TRUE,verboseIter=TRUE)
+grid <- expand.grid(C=1,sigma = 0.01)
+set.seed(13)
+pet_R_model <- train(AdoptionSpeed ~., data = pet.tr,method="svmRadial",
+                 trControl=trnControl,tuneGrid = grid)
+pet_R_model_t<- Sys.time() - start.time
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+#Decision Tree
+cl <- parallel::makeCluster(detectCores(logical=FALSE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+start.time <- Sys.time()
+tune.gridcart <- expand.grid(maxdepth = seq(1,10,1))
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, 
+                           allowParallel = TRUE,verboseIter=TRUE)
+set.seed(13)
+pet_dtree_fit_gini <- train(AdoptionSpeed ~., data = pet.tr, method = "rpart2",
+                   parms = list(split = "information"),
+                   trControl=trnControl)
+pet_dtree_fit_gini_t<- Sys.time() - start.time
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+#Boosting
+cl <- parallel::makeCluster(detectCores(logical=FALSE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+start.time <- Sys.time()
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, 
+                           allowParallel = TRUE,verboseIter=TRUE)
+set.seed(13)
+pet_boosted_tree <- train(AdoptionSpeed ~., data = pet.tr, method = "xgbTree",
+                          tuneLength = 3,
+                          trControl=trnControl)
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+#pet_boosted_tree$bestTune
+```
+
+##Decision Tree Plot
+We can see that Age is a big factor for pet adoption speed. The tree suggests that if Age < 3.5 then there are high chances that pet will be adopted within 30 days otherwise it will take more time
+```{r, message = FALSE, warning=FALSE}
+fancyRpartPlot(pet_dtree_fit_gini$finalModel, uniform=TRUE,
+               main="Pruned Classification Tree")
+```
+
+##Variable Importance according to our best model
+ * Let consider only the variables that our more than 50% importance for our analysis  
+    + Age is the most important variable
+aspect ratio is the second most important variable. Aspect Ratio of the pictures have an impact on the pet adoption speed  
+    + Breed is also highly weighed. It means that adopters prefer particular breeds while adopting  
+    + Word count is our derived variable using the word count of the description column in our dataset. This is an important variable as seen in our Exploratory Data Analysis and this plot also shows the same.
+
+
+```{r}
+#summary(pet_boosted_tree)
+#pet_boosted_tree
+#plot(pet_boosted_tree)
+plot(varImp(pet_boosted_tree),main='Variable Importance for Boosting Model')
+
+```
+##Model accuracy comparison
+
+###Boxplot
+
+Extreme Boosting(xgbTree) is giving us the best Accuracy and outperforms all other algorithms
+```{r model comparison}
+#Compare 3 models:
+pet_resamps_2 <- resamples(list(svmLinear = pet_L_model, 
+                                svmRadial = pet_R_model, 
+                                DecisionTree = pet_dtree_fit_gini,
+                              BoostedTree = pet_boosted_tree))
+
+bwplot(pet_resamps_2, metric = "Accuracy",main='Models vs Accuracy Boxplot')
+```
+###k-Fold parallel plot
+
+Each colour represents a fold. The line gives us the information of what accuracy the model is giving us when the same fold is fed into it. 
+
+**Result** : Extreme Boosting(xgbTree) is giving us significantly better accuracy for every fold.
+
+```{r}
+parallelplot(pet_resamps_2,
+             main='PetAdoptionSpeed : Parallel Plot for all models(k=5 folds)')
+```
+###Accuracy vs Time Comparison
+Each colour represents a model. The best model is going to be a balance between accuracy and time taken ie. the one that takes less time and also gives us good accuracy.  
+
+**Result** : Extreme Boosting(xgbTree) is giving us significantly better accuracy and take few seconds to give us the result
+
+```{r}
+xyplot(pet_resamps_2, what = "mTime",units = "min",
+       main='PetAdoptionSpeed : ModelTime Plot for all models(k=5 folds)',
+       auto.key=list(space='left', row=1, 
+                     title='Model', cex.title=1.5,
+                     lines=TRUE, points=FALSE))
+```
+
+
+###Learning Curve for our best model
+
+This is the learning curve for Training, Cross Validation Accuracy vs no of Training Examples  
+By looking at the plot, we can say that our model is to simple and we need more features for it perform better because the training accuracy is being pulled down and testing accuracy is not increasing. We could use our domain expertise to add some features(eg: No of times the dog raises eyebrows when the adopter comes to visit).
+
+```{r, warning=FALSE}
+
+pet.lcurve <- as.data.frame(lapply(pet.tr, as.numeric))
+pet.lcurve$AdoptionSpeed <- as.factor(pet.lcurve$AdoptionSpeed)
+
+cl <- parallel::makeCluster(detectCores(logical=FALSE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+start.time <- Sys.time()
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, allowParallel = TRUE)
+petbesttune = expand.grid(nrounds = 150, max_depth = 3, eta = 0.3, 
+                          gamma = 0, colsample_bytree = 0.6, 
+                          min_child_weight = 1,subsample =1)
+set.seed(13)
+lcurve_petboosted <- learing_curve_dat(
+  dat = pet.lcurve,
+  outcome = "AdoptionSpeed",test_prop = 0,
+  verbose = TRUE, method = "xgbTree",
+  metric = "Accuracy",tuneGrid = petbesttune)
+t<- Sys.time() - start.time
+parallel::stopCluster(cl)
+registerDoSEQ()
+```
+
+
+```{r}
+l.curve_petbdt<- ggplot(lcurve_petboosted, aes(x = Training_Size, y =Accuracy, color = Data)) + 
+  geom_smooth(method = loess, span = .8) + 
+  theme(legend.position="top")+
+  labs(title = "Pet boostTree : Accuracy(Train & Test) vs m")
+l.curve_petbdt
+
+```
+
+###Confusion Matrix
+Using our boosting model, we got an accuracy of 39.54% on the unseen Test data. This value is not far of our crossvalidation accuracy.
+Looking at the Confusion Matrix data, we can say that our model is performing poorly on the Class 0, 1 and 3  
+Class 0 low detection rate can be because it has fewer training examples compared to other classes  
+
+We could go back oversample class 0.
+
+```{r}
+# Generate predictions
+pred_petgbm <- predict(pet_boosted_tree, pet.te)
+
+# Performance evaluation - confusion matrix
+petgbm_cm <- confusionMatrix(pred_petgbm, 
+                pet.te$AdoptionSpeed,
+                dnn = c("GBM-Predicted", "Speed-Actual"))
+petgbm_cm
+
+```
+
+
+#Final Summary
+##Best Model
+Ensemble Boosting is giving us the best accuracy and we use it for our model  
+
+* **Factors in our control to improve animal Adoption Speed:**  
+    + Inducting Age < 3.5 animals
+    + Keeping proper aspect ratio of the posted animal photos
+    + Decription should be short and concise
+
+* **We can use this predictive algorithm in 2 ways:**  
+    + Push further those pets with highest likelihood of being adopted
+    + Implement the criteria across the board to "plain the field" and give all pets the same fair chance of being adopted
+
+##Time spent
+
++ **60%** of the time was spent on Data Exploration, understanding the json sentiment data and image metadata, extracting information from the metadata and merging the data.  
++ **20%** of time spent of model tuning, results interpretation and model selection.  
++ **20%** of the time was spent on making this report
+
+##Challenges faced
++ Videos of the pets were not available otherwise we could have used OpenCV to get more data of the animal  
++ Very few observations of Class 0 are available  
++ Since most of the decisions made in life are impacted by emotions, we could have some more data of the animal behavior. These questions can be included in a questionaire to the Recuer of the animal.
+
+***
+***
+***
+
